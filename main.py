@@ -8,25 +8,20 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ── Config (edit these) ───────────────────────────────────────────────────────
-
-# Uses /data if the Render persistent disk is mounted, otherwise falls back to
-# /tmp (data won't survive redeploys without the disk attached)
 DB_PATH     = "/data/simply.db" if os.path.isdir("/data") else "/tmp/simply.db"
 IP_SALT     = "12573a559d2dc72817dc6fd08504fb81badc5ba0f5c3b3a640548d8e28c32ad2"
-CORS_ORIGIN = "https://html.cafe/x2cbd5005"   # set to your frontend URL e.g. "https://simply.example.com"
+CORS_ORIGIN = "*"
 
-RATE_LIMIT_REQUESTS = 30     # max requests per IP per window
-RATE_LIMIT_WINDOW   = 60     # window in seconds
-BAN_THRESHOLD       = 120    # requests in window before auto-ban
-BAN_DURATION        = 3600   # ban length in seconds (1 hour)
-
-# ─────────────────────────────────────────────────────────────────────────────
+RATE_LIMIT_REQUESTS = 30
+RATE_LIMIT_WINDOW   = 60
+BAN_THRESHOLD       = 120
+BAN_DURATION        = 3600
 
 request_log: dict[str, list[float]] = defaultdict(list)
 banned_ips:  dict[str, float]       = {}
@@ -42,25 +37,20 @@ def get_client_ip(request: Request) -> str:
 
 def check_rate_limit(ip: str) -> tuple[bool, int]:
     now = time.time()
-
     ban_until = banned_ips.get(ip)
     if ban_until:
         if now < ban_until:
             return False, int(ban_until - now)
         del banned_ips[ip]
-
     window_start = now - RATE_LIMIT_WINDOW
     request_log[ip] = [t for t in request_log[ip] if t > window_start]
-
     if len(request_log[ip]) >= BAN_THRESHOLD:
         banned_ips[ip] = now + BAN_DURATION
         logger.warning(f"Auto-banned {ip} for {BAN_DURATION}s")
         return False, BAN_DURATION
-
     if len(request_log[ip]) >= RATE_LIMIT_REQUESTS:
         retry_after = int(RATE_LIMIT_WINDOW - (now - request_log[ip][0])) + 1
         return False, retry_after
-
     request_log[ip].append(now)
     return True, 0
 
@@ -138,7 +128,7 @@ def now_ts() -> int:
 
 @app.get("/")
 def root():
-    return {"status": "ok", "service": "Simply. Stats API"}
+    return FileResponse("index.html")
 
 
 @app.get("/health")

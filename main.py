@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 # /tmp (data won't survive redeploys without the disk attached)
 DB_PATH     = "/data/simply.db" if os.path.isdir("/data") else "/tmp/simply.db"
 IP_SALT     = "12573a559d2dc72817dc6fd08504fb81badc5ba0f5c3b3a640548d8e28c32ad2"
-CORS_ORIGIN = "*"   # set to your frontend URL e.g. "https://simply.example.com"
+CORS_ORIGIN = "https://html.cafe/x2cbd5005"   # set to your frontend URL e.g. "https://simply.example.com"
 
 RATE_LIMIT_REQUESTS = 30     # max requests per IP per window
 RATE_LIMIT_WINDOW   = 60     # window in seconds

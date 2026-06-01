@@ -15,9 +15,11 @@ logger = logging.getLogger(__name__)
 
 # ── Config (edit these) ───────────────────────────────────────────────────────
 
-DB_PATH    = "/data/simply.db"          # Render persistent disk mount path
-IP_SALT    = "12573a559d2dc72817dc6fd08504fb81badc5ba0f5c3b3a640548d8e28c32ad2"
-CORS_ORIGIN = "*"                       # Change to your frontend URL e.g. "https://simply.example.com"
+# Uses /data if the Render persistent disk is mounted, otherwise falls back to
+# /tmp (data won't survive redeploys without the disk attached)
+DB_PATH     = "/data/simply.db" if os.path.isdir("/data") else "/tmp/simply.db"
+IP_SALT     = "12573a559d2dc72817dc6fd08504fb81badc5ba0f5c3b3a640548d8e28c32ad2"
+CORS_ORIGIN = "*"   # set to your frontend URL e.g. "https://simply.example.com"
 
 RATE_LIMIT_REQUESTS = 30     # max requests per IP per window
 RATE_LIMIT_WINDOW   = 60     # window in seconds
@@ -64,13 +66,16 @@ def check_rate_limit(ip: str) -> tuple[bool, int]:
 
 
 def get_db() -> sqlite3.Connection:
-    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+    db_dir = os.path.dirname(DB_PATH)
+    if db_dir and not os.path.exists(db_dir):
+        os.makedirs(db_dir, exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
 
 
 def init_db():
+    logger.info(f"Using database at {DB_PATH}")
     with get_db() as conn:
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS visits (
@@ -89,7 +94,7 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_launches_ts  ON game_launches (ts);
             CREATE INDEX IF NOT EXISTS idx_launches_url ON game_launches (game_url);
         """)
-    logger.info(f"Database ready at {DB_PATH}")
+    logger.info("Database ready")
 
 
 @asynccontextmanager
@@ -138,18 +143,21 @@ def root():
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "ts": now_ts()}
+    return {"status": "ok", "ts": now_ts(), "db": DB_PATH}
 
 
 @app.post("/visit")
 async def track_visit(request: Request):
-    body    = {}
+    body = {}
     if request.headers.get("content-type", "").startswith("application/json"):
         body = await request.json()
     page    = str(body.get("page", "home"))[:32]
     ip_hash = hash_ip(get_client_ip(request))
     with get_db() as conn:
-        conn.execute("INSERT INTO visits (ts, ip_hash, page) VALUES (?, ?, ?)", (now_ts(), ip_hash, page))
+        conn.execute(
+            "INSERT INTO visits (ts, ip_hash, page) VALUES (?, ?, ?)",
+            (now_ts(), ip_hash, page),
+        )
     return {"ok": True}
 
 
@@ -163,7 +171,10 @@ async def track_launch(request: Request):
     if not game_url:
         raise HTTPException(400, "url is required")
     with get_db() as conn:
-        conn.execute("INSERT INTO game_launches (ts, game_url, game_name) VALUES (?, ?, ?)", (now_ts(), game_url, game_name))
+        conn.execute(
+            "INSERT INTO game_launches (ts, game_url, game_name) VALUES (?, ?, ?)",
+            (now_ts(), game_url, game_name),
+        )
     return {"ok": True}
 
 
@@ -174,12 +185,12 @@ def get_stats():
     week = now - 604_800
 
     with get_db() as conn:
-        total_visits  = conn.execute("SELECT COUNT(*) FROM visits").fetchone()[0]
-        unique_all    = conn.execute("SELECT COUNT(DISTINCT ip_hash) FROM visits").fetchone()[0]
-        unique_day    = conn.execute("SELECT COUNT(DISTINCT ip_hash) FROM visits WHERE ts >= ?", (day,)).fetchone()[0]
-        unique_week   = conn.execute("SELECT COUNT(DISTINCT ip_hash) FROM visits WHERE ts >= ?", (week,)).fetchone()[0]
-        visits_day    = conn.execute("SELECT COUNT(*) FROM visits WHERE ts >= ?", (day,)).fetchone()[0]
-        visits_week   = conn.execute("SELECT COUNT(*) FROM visits WHERE ts >= ?", (week,)).fetchone()[0]
+        total_visits   = conn.execute("SELECT COUNT(*) FROM visits").fetchone()[0]
+        unique_all     = conn.execute("SELECT COUNT(DISTINCT ip_hash) FROM visits").fetchone()[0]
+        unique_day     = conn.execute("SELECT COUNT(DISTINCT ip_hash) FROM visits WHERE ts >= ?", (day,)).fetchone()[0]
+        unique_week    = conn.execute("SELECT COUNT(DISTINCT ip_hash) FROM visits WHERE ts >= ?", (week,)).fetchone()[0]
+        visits_day     = conn.execute("SELECT COUNT(*) FROM visits WHERE ts >= ?", (day,)).fetchone()[0]
+        visits_week    = conn.execute("SELECT COUNT(*) FROM visits WHERE ts >= ?", (week,)).fetchone()[0]
         total_launches = conn.execute("SELECT COUNT(*) FROM game_launches").fetchone()[0]
         launches_day   = conn.execute("SELECT COUNT(*) FROM game_launches WHERE ts >= ?", (day,)).fetchone()[0]
         top_games = conn.execute("""
@@ -192,10 +203,10 @@ def get_stats():
         """, (day,)).fetchall()
 
     return {
-        "visits":           {"total": total_visits, "today": visits_day, "this_week": visits_week},
-        "unique_visitors":  {"total": unique_all, "today": unique_day, "this_week": unique_week},
-        "launches":         {"total": total_launches, "today": launches_day},
-        "top_games":        [{"name": r["game_name"], "url": r["game_url"], "plays": r["plays"]} for r in top_games],
-        "hourly_visits":    [{"ts": r["hour_ts"], "count": r["count"]} for r in hourly],
-        "generated_at":     now,
+        "visits":          {"total": total_visits,   "today": visits_day,     "this_week": visits_week},
+        "unique_visitors": {"total": unique_all,      "today": unique_day,     "this_week": unique_week},
+        "launches":        {"total": total_launches,  "today": launches_day},
+        "top_games":       [{"name": r["game_name"],  "url": r["game_url"],    "plays": r["plays"]} for r in top_games],
+        "hourly_visits":   [{"ts": r["hour_ts"],      "count": r["count"]}     for r in hourly],
+        "generated_at":    now,
     }
